@@ -33,7 +33,7 @@ public class AccessEgressFinder {
     private static final Logger LOG = LoggerFactory.getLogger(AccessEgressFinder.class);
 
     private static final double WALK_SPEED_MPS = 1.2;  // 도보 속도 (m/s)
-    private static final int MAX_STOPS = 10;           // 최대 검색 정류장 수
+    private static final int MAX_STOPS = 30;           // 최대 검색 정류장 수 (지하철역 포함 위해 증가)
 
     private final TransitData transitData;
 
@@ -190,8 +190,8 @@ public class AccessEgressFinder {
                 return result;
             }
 
-            // 상위 5개 후보만 A* 계산 (병렬 실행)
-            int osmCandidateLimit = Math.min(candidates.size(), 5);
+            // 상위 30개 후보만 A* 계산 (병렬 실행) - 지하철역 포함 위해 증가
+            int osmCandidateLimit = Math.min(candidates.size(), 30);
             final StreetNode origin = originNode;
             final double maxDist = maxDistanceMeters;
             final double originLat = lat;

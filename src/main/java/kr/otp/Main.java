@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
  */
 public class Main {
 
-    private static int maxResults = 5;  // 기본 결과 수
+    private static int maxResults = 5;   // 기본 결과 수
+    private static boolean useMultiCriteria = false;  // MULTI_CRITERIA 모드
 
     public static void main(String[] args) {
         // UTF-8 출력 설정
@@ -164,15 +165,19 @@ public class Main {
                                         double fromLat, double fromLon,
                                         double toLat, double toLon,
                                         int departureTime) {
-        System.out.printf("검색: (%.4f, %.4f) → (%.4f, %.4f) @ %s 이후, 최대 %d개%n",
-            fromLat, fromLon, toLat, toLon, formatTime(departureTime), maxResults);
+        String modeStr = useMultiCriteria ? "MULTI_CRITERIA" : "STANDARD";
+        System.out.printf("검색 [%s]: (%.4f, %.4f) → (%.4f, %.4f) @ %s 이후, 최대 %d개%n",
+            modeStr, fromLat, fromLon, toLat, toLon, formatTime(departureTime), maxResults);
         System.out.println("─────────────────────────────────────────────────────");
 
         long searchStart = System.currentTimeMillis();
 
-        List<RaptorPath<KoreanTripSchedule>> paths = raptor.route(
-            fromLat, fromLon, toLat, toLon, departureTime
-        );
+        List<RaptorPath<KoreanTripSchedule>> paths;
+        if (useMultiCriteria) {
+            paths = raptor.routeMultiCriteria(fromLat, fromLon, toLat, toLon, departureTime);
+        } else {
+            paths = raptor.route(fromLat, fromLon, toLat, toLon, departureTime);
+        }
 
         long searchElapsed = System.currentTimeMillis() - searchStart;
 
@@ -271,13 +276,13 @@ public class Main {
         System.out.println("───────────────────────────────────────────────────────────────");
         System.out.println("  입력: 출발위도 출발경도 도착위도 도착경도 시간 [결과수]");
         System.out.println("  예시: 37.5547 126.9707 37.4979 127.0276 09:00 5");
-        System.out.println("  명령: q(종료), n=숫자(결과수 변경)");
+        System.out.println("  명령: q(종료), n=숫자(결과수 변경), mc(MULTI_CRITERIA), std(STANDARD)");
         System.out.println("═══════════════════════════════════════════════════════════════");
         System.out.println();
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
             String line;
-            System.out.printf("[결과수: %d] > ", maxResults);
+            printPrompt();
 
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
@@ -288,7 +293,7 @@ public class Main {
                 }
 
                 if (line.isEmpty()) {
-                    System.out.printf("[결과수: %d] > ", maxResults);
+                    printPrompt();
                     continue;
                 }
 
@@ -300,7 +305,23 @@ public class Main {
                     } catch (NumberFormatException e) {
                         System.out.println("형식 오류. 예: n=10");
                     }
-                    System.out.printf("[결과수: %d] > ", maxResults);
+                    printPrompt();
+                    continue;
+                }
+
+                // MULTI_CRITERIA 모드 전환
+                if (line.equalsIgnoreCase("mc")) {
+                    useMultiCriteria = true;
+                    System.out.println("검색 모드: MULTI_CRITERIA (파레토 최적)");
+                    printPrompt();
+                    continue;
+                }
+
+                // STANDARD 모드 전환
+                if (line.equalsIgnoreCase("std")) {
+                    useMultiCriteria = false;
+                    System.out.println("검색 모드: STANDARD (최단 시간)");
+                    printPrompt();
                     continue;
                 }
 
@@ -308,7 +329,7 @@ public class Main {
                     String[] parts = line.split("\\s+");
                     if (parts.length < 5) {
                         System.out.println("형식 오류. 예: 37.5547 126.9707 37.4979 127.0276 09:00");
-                        System.out.printf("[결과수: %d] > ", maxResults);
+                        printPrompt();
                         continue;
                     }
 
@@ -332,11 +353,19 @@ public class Main {
                 }
 
                 System.out.println();
-                System.out.printf("[결과수: %d] > ", maxResults);
+                printPrompt();
             }
         } catch (Exception e) {
             System.err.println("CLI 오류: " + e.getMessage());
         }
+    }
+
+    /**
+     * 프롬프트 출력
+     */
+    private static void printPrompt() {
+        String modeStr = useMultiCriteria ? "MC" : "STD";
+        System.out.printf("[%s, n=%d] > ", modeStr, maxResults);
     }
 
     /**

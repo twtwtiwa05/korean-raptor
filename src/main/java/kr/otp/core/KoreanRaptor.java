@@ -7,8 +7,11 @@ import kr.otp.raptor.spi.KoreanTransitDataProvider;
 import kr.otp.raptor.spi.KoreanTripSchedule;
 
 import org.opentripplanner.raptor.RaptorService;
+import org.opentripplanner.raptor.api.model.GeneralizedCostRelaxFunction;
 import org.opentripplanner.raptor.api.model.RaptorAccessEgress;
+import org.opentripplanner.raptor.api.model.RelaxFunction;
 import org.opentripplanner.raptor.api.path.RaptorPath;
+import org.opentripplanner.raptor.api.request.Optimization;
 import org.opentripplanner.raptor.api.request.RaptorEnvironment;
 import org.opentripplanner.raptor.api.request.RaptorProfile;
 import org.opentripplanner.raptor.api.request.RaptorRequest;
@@ -50,8 +53,14 @@ public class KoreanRaptor {
     private static final double WALK_SPEED_MPS = 1.2;             // 도보 속도 (m/s)
     private static final int SEARCH_WINDOW_SECONDS = 900;         // 검색 시간 범위 (15분)
     private static final int MAX_RESULTS = 5;                     // 최대 결과 수
-    private static final int MAX_ACCESS_STOPS = 5;                // 최대 출발 정류장 수
-    private static final int MAX_EGRESS_STOPS = 5;                // 최대 도착 정류장 수
+    private static final int MAX_ACCESS_STOPS = 30;               // 최대 출발 정류장 수 (지하철역 포함 위해 증가)
+    private static final int MAX_EGRESS_STOPS = 30;               // 최대 도착 정류장 수 (지하철역 포함 위해 증가)
+
+    // MULTI_CRITERIA 최적화 설정 (STANDARD와 동일 조건)
+    private static final int MC_SEARCH_WINDOW_SECONDS = 900;      // MC 모드 검색 범위 (15분, STD와 동일)
+    private static final int MC_ADDITIONAL_TRANSFERS = 3;         // MC 모드 추가 환승 제한 (3회, STD와 동일)
+    private static final double MC_RELAX_RATIO = 1.0;             // 비용 완화 없음 (정확한 파레토)
+    private static final int MC_RELAX_SLACK = 0;                  // 슬랙 없음
 
     private final TransitData transitData;
     private final KoreanTransitDataProvider provider;
@@ -155,6 +164,74 @@ public class KoreanRaptor {
     }
 
     /**
+     * MULTI_CRITERIA 모드 좌표 기반 경로 탐색
+     *
+     * 파레토 최적 경로를 반환합니다 (시간/환승/비용 trade-off).
+     * STANDARD 모드보다 느리지만 (2~3초) 다양한 경로 옵션을 제공합니다.
+     *
+     * @param fromLat 출발지 위도
+     * @param fromLon 출발지 경도
+     * @param toLat   목적지 위도
+     * @param toLon   목적지 경도
+     * @param departureTime 출발 시간 (초, 자정 기준)
+     * @return 파레토 최적 경로 목록 (시간/환승/비용 다양)
+     */
+    public List<RaptorPath<KoreanTripSchedule>> routeMultiCriteria(
+        double fromLat, double fromLon,
+        double toLat, double toLon,
+        int departureTime
+    ) {
+        long startTime = System.currentTimeMillis();
+
+        // 1. 출발지 근처 정류장 찾기
+        List<RaptorAccessEgress> accessPaths = accessEgressFinder.findAccess(
+            fromLat, fromLon, MAX_ACCESS_WALK_METERS
+        );
+        if (accessPaths.isEmpty()) {
+            LOG.warn("출발지 근처에 정류장이 없습니다: ({}, {})", fromLat, fromLon);
+            return List.of();
+        }
+        if (accessPaths.size() > MAX_ACCESS_STOPS) {
+            accessPaths = accessPaths.subList(0, MAX_ACCESS_STOPS);
+        }
+
+        // 2. 목적지 근처 정류장 찾기
+        List<RaptorAccessEgress> egressPaths = accessEgressFinder.findEgress(
+            toLat, toLon, MAX_EGRESS_WALK_METERS
+        );
+        if (egressPaths.isEmpty()) {
+            LOG.warn("목적지 근처에 정류장이 없습니다: ({}, {})", toLat, toLon);
+            return List.of();
+        }
+        if (egressPaths.size() > MAX_EGRESS_STOPS) {
+            egressPaths = egressPaths.subList(0, MAX_EGRESS_STOPS);
+        }
+
+        LOG.debug("MULTI_CRITERIA - Access: {}개, Egress: {}개",
+            accessPaths.size(), egressPaths.size());
+
+        // 3. MULTI_CRITERIA 요청 생성
+        RaptorRequest<KoreanTripSchedule> request = buildMultiCriteriaRequest(
+            accessPaths, egressPaths, departureTime
+        );
+
+        // 4. Raptor 실행
+        RaptorResponse<KoreanTripSchedule> response = raptorService.route(request, provider);
+
+        long elapsed = System.currentTimeMillis() - startTime;
+
+        if (response.noConnectionFound()) {
+            LOG.info("MULTI_CRITERIA 경로를 찾을 수 없습니다 ({}ms)", elapsed);
+            return List.of();
+        }
+
+        Collection<RaptorPath<KoreanTripSchedule>> paths = response.paths();
+        LOG.info("MULTI_CRITERIA 경로 {}개 발견 ({}ms)", paths.size(), elapsed);
+
+        return List.copyOf(paths);
+    }
+
+    /**
      * 정류장 인덱스 기반 경로 탐색 (직접 지정)
      *
      * @param fromStopIndex 출발 정류장 인덱스
@@ -212,6 +289,43 @@ public class KoreanRaptor {
 
         // 추가 최적화: 최대 환승 횟수 제한
         builder.searchParams().numberOfAdditionalTransfers(3);  // 최대 3회 환승
+
+        return builder.build();
+    }
+
+    /**
+     * MULTI_CRITERIA Raptor 요청 빌드 (최적화 적용)
+     *
+     * 최적화 기법:
+     * 1. relaxC1: 비용 10% + 300초 완화 → 파레토 세트 크기 감소
+     * 2. 검색 범위 축소: 600초 윈도우, 2회 추가 환승
+     * 3. PARETO_CHECK_AGAINST_DESTINATION: 목적지 기준 조기 가지치기
+     */
+    private RaptorRequest<KoreanTripSchedule> buildMultiCriteriaRequest(
+        List<RaptorAccessEgress> accessPaths,
+        List<RaptorAccessEgress> egressPaths,
+        int departureTime
+    ) {
+        RaptorRequestBuilder<KoreanTripSchedule> builder = new RaptorRequestBuilder<>();
+
+        // 파레토 비용 완화 함수: v' = v * 1.1 + 300초
+        // → 비용이 10% + 300초 이내면 "지배되지 않음"으로 간주
+        RelaxFunction relaxC1 = GeneralizedCostRelaxFunction.of(MC_RELAX_RATIO, MC_RELAX_SLACK);
+
+        builder
+            .profile(RaptorProfile.MULTI_CRITERIA)          // 파레토 최적 모드
+            .searchDirection(SearchDirection.FORWARD)
+            .enableOptimization(Optimization.PARETO_CHECK_AGAINST_DESTINATION)  // 목적지 최적화
+            .searchParams()
+                .earliestDepartureTime(departureTime)
+                .searchWindowInSeconds(MC_SEARCH_WINDOW_SECONDS)  // 600초 (축소)
+                .timetable(true)
+                .numberOfAdditionalTransfers(MC_ADDITIONAL_TRANSFERS)  // 2회 (축소)
+                .addAccessPaths(accessPaths)
+                .addEgressPaths(egressPaths);
+
+        // MULTI_CRITERIA 설정: relaxC1 적용
+        builder.withMultiCriteria(mc -> mc.withRelaxC1(relaxC1));
 
         return builder.build();
     }

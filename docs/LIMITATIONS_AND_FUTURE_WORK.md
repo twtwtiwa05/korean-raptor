@@ -14,60 +14,87 @@
 
 ## 1. 현재 한계점
 
-### 1.1 Raptor 프로파일 제한
+### 1.1 Raptor 프로파일 ✅ 해결됨
+
+#### 현재 상태
+
+두 가지 검색 모드 모두 ~0.35초 이내 검색 가능:
+
+| 프로파일 | 검색 시간 | 경로 수 | 결과 특성 |
+|----------|----------|--------|----------|
+| STANDARD | ~0.35초 | 4개 | 시간 기준 최적 경로 |
+| MULTI_CRITERIA | **~0.35초** | **11개** | 파레토 최적 경로 (시간/환승/비용 다양) |
+
+#### 최적화 적용 내용
+
+기존 MULTI_CRITERIA는 ~14초가 걸렸으나, 다음 최적화로 **40배 개선** (~0.35초):
+
+```java
+// KoreanRaptor.java에 적용된 최적화 설정
+MC_SEARCH_WINDOW_SECONDS = 900    // STANDARD와 동일 (15분)
+MC_ADDITIONAL_TRANSFERS = 3        // STANDARD와 동일 (3회)
+MC_RELAX_RATIO = 1.0               // relaxC1 비활성화 (핵심!)
+MC_RELAX_SLACK = 0                 // relaxC1 비활성화
+
+// 적용된 OTP 기능
+Optimization.PARETO_CHECK_AGAINST_DESTINATION  // 목적지 조기 가지치기
+```
+
+#### 핵심 발견
+
+**relaxC1 비활성화가 성능 향상의 핵심:**
+- relaxC1 활성화: 파레토 지배 조건 완화 → 더 많은 해 생존 → 느려짐
+- relaxC1 비활성화: 엄격한 파레토 지배 → 불필요한 해 제거 → 빨라짐
+
+**결과:** MC가 STD와 동일한 속도(~0.35초)로 **2.75배 더 많은 경로**(11개 vs 4개) 제공!
+
+#### CLI 사용법
+
+```
+[STD, n=5] > mc                    # MULTI_CRITERIA 모드 전환
+[MC, n=5] > 37.5547 126.9707 37.4979 127.0276 09:00
+검색 [MULTI_CRITERIA]: ... (0.350초)
+■ 경로 1: 09:00 출발 → 09:40 도착 (39분, 환승 2회)  ← 시간 최적
+■ 경로 2: 09:02 출발 → 09:48 도착 (45분, 환승 1회)  ← 환승 최적
+```
+
+### 1.2 불필요한 환승 버그 ✅ 해결됨
 
 #### 문제점
 
-현재 **STANDARD 프로파일**을 사용하여 검색 속도 ~0.5초를 달성했습니다.
-그러나 이로 인해 **다양한 경로 옵션 제공이 제한**됩니다.
-
-| 프로파일 | 검색 시간 | 결과 특성 |
-|----------|----------|----------|
-| STANDARD | ~0.5초 | 각 출발 시간의 최단 도착 경로만 |
-| MULTI_CRITERIA | ~14초 | 파레토 최적 경로 (시간/환승/비용 다양) |
-
-#### 구체적 차이
-
-**STANDARD 결과:**
-```
-09:03 출발 → 09:45 도착 (환승 2회) ← 가장 빠름
-09:07 출발 → 09:48 도착 (환승 2회) ← 가장 빠름
-```
-
-**MULTI_CRITERIA 결과 (제공 못함):**
-```
-09:03 출발 → 09:45 도착 (환승 2회) ← 가장 빠름
-09:03 출발 → 09:52 도착 (환승 1회) ← 환승 적음
-09:03 출발 → 10:05 도착 (환승 0회) ← 직행
-```
-
-#### 원인 분석
-
-MULTI_CRITERIA가 느린 이유:
+지하철 직행 경로가 표시되지 않고, 불필요한 버스 환승이 추가되는 버그:
 
 ```
-STANDARD:
-  정류장당 상태 = 1개 (최단 시간)
-  비교 연산 = O(1)
-
-MULTI_CRITERIA:
-  정류장당 상태 = 파레토 집합 (5~20개)
-  비교 연산 = O(파레토 집합 크기) × 3가지 기준
-
-  → 총 연산량 15~60배 증가
+예: 서울역 → 홍대입구 (공항철도 직행 가능)
+문제: 공항철도 → 환승 도보 → 버스 → 목적지 (환승 1회)
+기대: 공항철도 → 도보 → 목적지 (환승 0회)
 ```
 
-OTP 내부 `ParetoSet` 구현:
+#### 원인
+
+Access/Egress 후보 수가 너무 적어서(5개) 버스 정류장만 선택되고 지하철역이 제외됨.
+
+#### 해결
+
 ```java
-// 새 경로마다 기존 모든 해와 비교
-for (int i = 0; i < size; ++i) {
-    boolean leftDominance = leftDominanceExist(newValue, elements[i]);
-    boolean rightDominance = rightDominanceExist(newValue, elements[i]);
-    // 3가지 기준(시간, 환승, 비용)으로 지배 관계 판정
-}
+// AccessEgressFinder.java
+MAX_STOPS = 30              // 10 → 30
+osmCandidateLimit = 30      // 5 → 30
+
+// KoreanRaptor.java
+MAX_ACCESS_STOPS = 30       // 10 → 30
+MAX_EGRESS_STOPS = 30       // 10 → 30
 ```
 
-### 1.2 OSM 메모리 사용량
+#### 결과
+
+| 항목 | 수정 전 | 수정 후 |
+|------|---------|---------|
+| 환승 | 1회 | **0회** |
+| 소요시간 | 22분 | **16분** |
+| 검색시간 | 0.487초 | **0.314초** |
+
+### 1.3 OSM 메모리 사용량
 
 #### 문제점
 
@@ -90,7 +117,7 @@ OSM 기반 도보 경로 사용 시 **40GB+ RAM**이 필요합니다.
 총 메모리: ~15GB (그래프) + ~10GB (JVM 오버헤드) + ~10GB (여유)
 ```
 
-### 1.3 초기화 시간
+### 1.4 초기화 시간
 
 #### 문제점
 
@@ -103,7 +130,7 @@ OSM 기반 도보 경로 사용 시 **40GB+ RAM**이 필요합니다.
 | OSM 로드 | ~45초 | 15M 노드 그래프 구축 |
 | 엔진 초기화 | ~3초 | 정류장-노드 매핑 |
 
-### 1.4 실시간 데이터 미지원
+### 1.5 실시간 데이터 미지원
 
 현재 **정적 GTFS**만 지원하며, 실시간 정보(GTFS-RT)는 지원하지 않습니다.
 
@@ -111,7 +138,7 @@ OSM 기반 도보 경로 사용 시 **40GB+ RAM**이 필요합니다.
 - 지연/운휴 정보 미반영
 - 실시간 혼잡도 미반영
 
-### 1.5 경로 품질 제한
+### 1.6 경로 품질 제한
 
 #### 도보 경로 정확도
 
@@ -129,42 +156,26 @@ OSM 기반 도보 경로 사용 시 **40GB+ RAM**이 필요합니다.
 
 ## 2. 향후 개선사항
 
-### 2.1 MULTI_CRITERIA 성능 개선 (우선순위: 높음)
+### 2.1 MULTI_CRITERIA 성능 개선 ✅ 완료
 
-#### 방안 1: STANDARD 다중 실행 + 병합
+OTP 외부 설정만으로 14초 → 0.35초 (**40배 개선**) 달성.
 
-```java
-// 외부에서 구현 가능
-List<Path> fastPaths = raptor.route(STANDARD);  // 0.3초
-raptor.setTransferPenalty(300);  // 환승 페널티
-List<Path> lowTransferPaths = raptor.route(STANDARD);  // 0.3초
-List<Path> combined = mergeAndDeduplicate(fastPaths, lowTransferPaths);
-// 총 ~0.6초로 다양한 옵션 제공
-```
+적용된 최적화:
+- **relaxC1 비활성화**: 엄격한 파레토 지배 → 불필요한 해 빠르게 제거 (핵심!)
+- **PARETO_CHECK_AGAINST_DESTINATION**: 목적지 기준 조기 가지치기
+- **STANDARD와 동일 조건**: 15분 윈도우, 3회 환승 (탐색 공간 동일)
 
-#### 방안 2: 파라미터 최적화
+**결과:** MC가 STD와 동일 속도(~0.35초)로 2.75배 더 많은 경로(11개 vs 4개) 제공!
 
-```java
-// 검색 범위 축소
-builder.searchParams()
-    .numberOfAdditionalTransfers(2)  // 3 → 2
-    .searchWindowInSeconds(300);      // 900 → 300
-// 예상: 14초 → 3~5초
-```
+자세한 내용은 [1.1 Raptor 프로파일](#11-raptor-프로파일--해결됨) 참조.
 
-#### 방안 3: OTP 내부 수정 (장기)
+### 2.2 불필요한 환승 버그 수정 ✅ 완료
 
-```java
-// ParetoSet 크기 제한
-private static final int MAX_PARETO_SIZE = 5;
+Access/Egress 후보 수를 30개로 확대하여 지하철역이 누락되는 문제 해결.
 
-// 휴리스틱 가지치기
-if (estimatedArrival > bestArrival * 1.3) {
-    prune();
-}
-```
+자세한 내용은 [1.2 불필요한 환승 버그](#12-불필요한-환승-버그--해결됨) 참조.
 
-### 2.2 메모리 최적화 (우선순위: 중간)
+### 2.3 메모리 최적화 (우선순위: 중간)
 
 #### 방안 1: OSM 그래프 압축
 
@@ -192,7 +203,7 @@ OsmLoader loader = new OsmLoader(osmPath)
 MappedByteBuffer graphBuffer = fileChannel.map(...);
 ```
 
-### 2.3 실시간 데이터 지원 (우선순위: 중간)
+### 2.4 실시간 데이터 지원 (우선순위: 중간)
 
 #### GTFS-RT 연동
 
@@ -210,7 +221,7 @@ rtLoader.onUpdate(update -> {
 - VehiclePosition: 차량 위치
 - Alert: 서비스 알림
 
-### 2.4 API 서버화 (우선순위: 중간)
+### 2.5 API 서버화 (우선순위: 중간)
 
 #### REST API
 
@@ -239,7 +250,7 @@ GET /api/v1/route?
 }
 ```
 
-### 2.5 정류장 검색 최적화 (우선순위: 낮음)
+### 2.6 정류장 검색 최적화 (우선순위: 낮음)
 
 #### R-tree 공간 인덱스
 
@@ -258,7 +269,7 @@ List<Integer> candidates = stopIndex.search(
 );
 ```
 
-### 2.6 멀티모달 지원 (우선순위: 낮음)
+### 2.7 멀티모달 지원 (우선순위: 낮음)
 
 #### 추가 교통수단
 
@@ -298,13 +309,14 @@ List<Integer> candidates = stopIndex.search(
 
 ## 개선 로드맵
 
-| 단계 | 내용 | 예상 효과 |
-|------|------|----------|
-| Phase 1 | STANDARD 다중 실행 + 병합 | 다양한 경로 옵션 (~0.6초) |
-| Phase 2 | API 서버화 (Spring Boot) | 웹/앱 연동 가능 |
-| Phase 3 | GTFS-RT 연동 | 실시간 정보 반영 |
-| Phase 4 | 메모리 최적화 | 16GB RAM으로 실행 가능 |
-| Phase 5 | MULTI_CRITERIA 최적화 | 파레토 경로 2~3초 |
+| 단계 | 내용 | 상태 |
+|------|------|------|
+| Phase 1 | MULTI_CRITERIA 최적화 | ✅ **완료** (14초 → 0.35초, 40배 개선) |
+| Phase 1.5 | 불필요한 환승 버그 수정 | ✅ **완료** (Access/Egress 30개 확대) |
+| Phase 2 | API 서버화 (Spring Boot) | ⏳ 예정 |
+| Phase 3 | GTFS-RT 연동 | ⏳ 예정 |
+| Phase 4 | 메모리 최적화 | ⏳ 예정 |
+| Phase 5 | 테스트 코드 작성 | ⏳ 예정 |
 
 ---
 

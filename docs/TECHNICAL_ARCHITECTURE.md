@@ -41,7 +41,7 @@
 | 환승 | 2,027,380개 |
 | OSM 노드 | 15,711,249개 |
 | **초기화 시간** | ~60초 |
-| **검색 시간** | **~0.5초** |
+| **검색 시간** | **~0.35초** |
 
 ### 1.3 지원 교통수단
 
@@ -905,10 +905,10 @@ public class AccessEgressFinder {
         // 2. 출발지 도로 노드 검색
         StreetNode originNode = streetNetwork.findNearestNode(lat, lon, 300);
 
-        // 3. 상위 5개 후보에 대해 병렬 A* 실행
+        // 3. 상위 30개 후보에 대해 병렬 A* 실행 (지하철역 포함 위해 증가)
         List<Future<StopDistance>> futures = new ArrayList<>();
 
-        for (int i = 0; i < Math.min(candidates.size(), 5); i++) {
+        for (int i = 0; i < Math.min(candidates.size(), 30); i++) {
             StopDistance sd = candidates.get(i);
 
             futures.add(executor.submit(() -> {
@@ -957,23 +957,59 @@ public class AccessEgressFinder {
 | v3 (OSM) | ~26초 | OSM A* 추가 (순차, 노드 초기화) |
 | v4 | ~3초 | A* HashMap 최적화 |
 | v5 | ~0.5초 | 병렬 A* + 사전 매핑 |
+| **v6** | **~0.35초** | **MULTI_CRITERIA 최적화 (relaxC1 비활성화)** |
 
 ### 7.2 Raptor 프로파일 선택
 
-```java
-// 느림: MULTI_CRITERIA (다중 목표 최적화)
-builder.profile(RaptorProfile.MULTI_CRITERIA);  // ~14초
+두 가지 프로파일 모두 ~0.35초 이내 검색 가능:
 
-// 빠름: STANDARD (단일 최적 경로)
-builder.profile(RaptorProfile.STANDARD);         // ~0.3초
+```java
+// STANDARD 모드 (시간 기준 최적)
+builder.profile(RaptorProfile.STANDARD);
+
+// MULTI_CRITERIA 모드 (파레토 최적, 최적화 적용)
+builder.profile(RaptorProfile.MULTI_CRITERIA);
+builder.enableOptimization(Optimization.PARETO_CHECK_AGAINST_DESTINATION);
+// relaxC1 비활성화 → 엄격한 파레토 지배
 ```
 
 **프로파일 비교:**
 
-| 프로파일 | 특징 | 용도 |
-|----------|------|------|
-| `MULTI_CRITERIA` | 시간+환승+비용 파레토 최적화 | 다양한 옵션 제공 |
-| `STANDARD` | 가장 빠른 단일 경로 | 빠른 응답 필요 시 |
+| 프로파일 | 검색 시간 | 경로 수 | 특징 |
+|----------|----------|--------|------|
+| `STANDARD` | ~0.35초 | 4개 | 시간 기준 최적 경로 |
+| `MULTI_CRITERIA` | ~0.35초 | **11개** | 시간+환승+비용 파레토 최적화 |
+
+### 7.2.1 MULTI_CRITERIA 최적화 상세
+
+기존 MULTI_CRITERIA는 ~14초가 걸렸으나, 다음 최적화로 **40배 개선**:
+
+```java
+// KoreanRaptor.java의 buildMultiCriteriaRequest()
+private static final int MC_SEARCH_WINDOW_SECONDS = 900;   // 15분 (STANDARD와 동일)
+private static final int MC_ADDITIONAL_TRANSFERS = 3;       // 3회 (STANDARD와 동일)
+private static final double MC_RELAX_RATIO = 1.0;           // relaxC1 비활성화 (핵심!)
+private static final int MC_RELAX_SLACK = 0;                // relaxC1 비활성화
+
+builder
+    .profile(RaptorProfile.MULTI_CRITERIA)
+    .enableOptimization(Optimization.PARETO_CHECK_AGAINST_DESTINATION)
+    .searchParams()
+        .searchWindowInSeconds(MC_SEARCH_WINDOW_SECONDS)
+        .numberOfAdditionalTransfers(MC_ADDITIONAL_TRANSFERS);
+
+// relaxC1 비활성화: ratio=1.0, slack=0 → 엄격한 파레토 지배
+```
+
+**핵심 발견 - relaxC1 비활성화:**
+
+| 설정 | 효과 |
+|------|------|
+| relaxC1 활성화 (ratio>1.0) | 파레토 지배 조건 완화 → 더 많은 해 생존 → **느려짐** |
+| **relaxC1 비활성화 (ratio=1.0)** | **엄격한 파레토 지배 → 불필요한 해 빠르게 제거 → 빨라짐** |
+| `PARETO_CHECK_AGAINST_DESTINATION` | 목적지 기준 조기 가지치기 → 불필요한 경로 제거 |
+
+**결과:** MC가 STD와 동일한 속도(~0.35초)로 **2.75배 더 많은 경로**(11개 vs 4개) 제공!
 
 ### 7.3 검색 윈도우 최적화
 
@@ -1019,9 +1055,9 @@ gScores.put(nodeId, distance);
 int cores = Runtime.getRuntime().availableProcessors();  // 8
 ExecutorService executor = Executors.newFixedThreadPool(cores);
 
-// 5개 정류장에 대해 A* 병렬 실행
+// 30개 정류장에 대해 A* 병렬 실행 (지하철역 포함 위해 증가)
 List<Future<StopDistance>> futures = new ArrayList<>();
-for (int i = 0; i < 5; i++) {
+for (int i = 0; i < 30; i++) {
     futures.add(executor.submit(() -> {
         // 각 스레드에서 독립적으로 A* 실행
         return walkingRouter.getWalkingDistanceBetweenNodes(origin, stop);
@@ -1075,10 +1111,14 @@ StreetNode stopNode = stopNearestNodes[stopIndex];  // O(1)
 │                                                              │
 │  5. 병렬 A* 실행                                             │
 │     효과: 3초 → 0.5초 (83% 단축)                             │
-│     원리: 8코어 스레드 풀, 5개 A* 동시 실행                    │
+│     원리: 8코어 스레드 풀, 30개 A* 동시 실행                   │
+│                                                              │
+│  6. Access/Egress 후보 확대                                  │
+│     효과: 불필요한 환승 제거                                  │
+│     원리: 5개 → 30개로 확대하여 지하철역 포함 보장            │
 │                                                              │
 │  ─────────────────────────────────────────────               │
-│  총 효과: 26초 → 0.5초 (98% 단축)                            │
+│  총 효과: 26초 → 0.3초 (99% 단축) + 불필요한 환승 제거       │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -1146,7 +1186,7 @@ StreetNode stopNode = stopNearestNodes[stopIndex];  // O(1)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      검색 흐름 (~0.5초)                       │
+│                      검색 흐름 (~0.35초)                      │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  입력: (37.5547, 126.9707) → (37.4979, 127.0276) @ 09:00    │
@@ -1159,14 +1199,14 @@ StreetNode stopNode = stopNearestNodes[stopIndex];  // O(1)
 │  └────────┬─────────┘                                        │
 │           │                                                  │
 │           ▼                                                  │
-│  출발지 근처 정류장 5개 (병렬 A* 거리 계산)                     │
+│  출발지 근처 정류장 30개 (병렬 A* 거리 계산)                    │
 │  - 서울역버스환승센터 (도보 3분)                               │
 │  - 서울역 지하철 (도보 5분)                                    │
 │  - ...                                                       │
 │                                                              │
 │  Step 2: Egress 정류장 검색 (~100ms)                         │
 │  ─────────────────────────                                   │
-│  도착지 근처 정류장 5개                                       │
+│  도착지 근처 정류장 30개 (지하철역 포함 위해 증가)              │
 │  - 강남역 (도보 2분)                                          │
 │  - 신논현역 (도보 8분)                                        │
 │  - ...                                                       │
