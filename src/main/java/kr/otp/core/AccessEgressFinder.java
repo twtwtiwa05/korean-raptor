@@ -190,8 +190,8 @@ public class AccessEgressFinder {
                 return result;
             }
 
-            // 상위 30개 후보만 A* 계산 (병렬 실행) - 지하철역 포함 위해 증가
-            int osmCandidateLimit = Math.min(candidates.size(), 30);
+            // 상위 50개 후보만 A* 계산 (병렬 실행) - 도보 거리 800m 대응
+            int osmCandidateLimit = Math.min(candidates.size(), 50);
             final StreetNode origin = originNode;
             final double maxDist = maxDistanceMeters;
             final double originLat = lat;

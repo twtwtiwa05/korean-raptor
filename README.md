@@ -8,37 +8,51 @@
 
 > 출발/도착 좌표만 입력하면 **0.35초 내**에 최적 대중교통 경로를 찾아주는 CLI 엔진
 >
-> **두 가지 검색 모드 지원**: STANDARD (4개 경로) / MULTI_CRITERIA (11개 파레토 최적 경로)
+> **검색 모드**: STANDARD / MULTI_CRITERIA | **시나리오 모드**: 노선 추가/삭제/배차 조정
+
+### Quick Start
+
+```bash
+# 빌드
+./gradlew fatJar
+
+# 경로 검색 (서울역 → 강남역)
+search.cmd 37.5547 126.9707 37.4979 127.0276 09:00
+
+# 대화형 모드
+search.cmd
+> mc                   # MULTI_CRITERIA 모드
+> scenario             # 시나리오 모드
+```
 
 ### Based on
 
-이 프로젝트는 [OpenTripPlanner](https://github.com/opentripplanner/OpenTripPlanner)의 **Raptor 모듈**을 사용합니다.
-
-- **Raptor 알고리즘**: Microsoft Research의 [RAPTOR: Round-Based Public Transit Routing](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (2012) 기반
-- **구현체**: OTP Raptor JAR (LGPL v3 라이선스)를 그대로 사용하고, SPI 인터페이스만 한국 GTFS에 맞게 구현
+[OpenTripPlanner](https://github.com/opentripplanner/OpenTripPlanner)의 **Raptor 모듈** 사용 - Microsoft Research의 [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (2012) 기반
 
 ---
 
 ## Documentation
 
-- **[시작 가이드](docs/GETTING_STARTED.md)** - 설치부터 실행까지 상세 안내
-- **[기술 아키텍처](docs/TECHNICAL_ARCHITECTURE.md)** - 시스템 설계, SPI 구현, OSM 통합, 성능 최적화 상세
-- **[한계점 및 향후 개선](docs/LIMITATIONS_AND_FUTURE_WORK.md)** - 현재 제한사항, 개선 로드맵
-- [설정 옵션](#configuration)
-- [아키텍처](#architecture)
+| 문서 | 설명 |
+|------|------|
+| **[시작 가이드](docs/GETTING_STARTED.md)** | 설치, 데이터 준비, 실행 방법 |
+| **[기술 아키텍처](docs/TECHNICAL_ARCHITECTURE.md)** | SPI 구현, OSM 통합, 성능 최적화 |
+| **[시나리오 모드](docs/Scenario-Mode.md)** | 노선 추가/삭제, 배차 조정 시뮬레이션 |
+| **[배치 테스트](docs/BATCH_PERFORMANCE_TEST.md)** | 1000 OD 대량 처리 성능 |
+| **[한계점 및 로드맵](docs/LIMITATIONS_AND_FUTURE_WORK.md)** | 제한사항, 개선 계획 |
 
 ---
 
 ## Features
 
-- **전국 대중교통 지원**: 버스, 지하철, KTX/SRT, 일반철도
-- **초고속 검색**: ~0.35초 (21만 정류장, 35만 트립)
-- **두 가지 검색 모드**:
-  - **STANDARD**: 시간 기준 최적 경로 (~0.35초, 4개 경로)
-  - **MULTI_CRITERIA**: 파레토 최적 경로 (~0.35초, 11개 경로) - 시간/환승/비용 다양한 옵션
-- **실제 도보 경로**: OSM 기반 A* 알고리즘 (선택적)
-- **좌표 기반 검색**: 위도/경도 입력으로 가까운 정류장 자동 탐색
-- **CLI & 대화형 모드**: 간편한 사용
+| 기능 | 설명 |
+|------|------|
+| **전국 대중교통** | 버스, 지하철, KTX/SRT, 일반철도 (21만 정류장, 35만 트립) |
+| **초고속 검색** | ~0.35초 (STANDARD: 4개, MULTI_CRITERIA: 11개 파레토 최적) |
+| **시나리오 모드** | 노선 추가/삭제, 배차간격 조정 → 정책 시뮬레이션 |
+| **배치 처리** | 1000 OD → 23초 (43.4 req/s, 16스레드 병렬) |
+| **OSM 도보 경로** | A* 알고리즘 기반 실제 도로 경로 (15M 노드) |
+| **좌표 기반 검색** | 위도/경도 → 가까운 정류장 자동 탐색 |
 
 ---
 
@@ -166,6 +180,25 @@ search.cmd
 | **STANDARD** | `std` | 시간 기준 최적 경로 | ~0.35초 | 4개 |
 | **MULTI_CRITERIA** | `mc` | 파레토 최적 (시간/환승/비용 다양) | ~0.35초 | **11개** |
 
+### 시나리오 모드
+
+대중교통 네트워크 변경을 시뮬레이션하여 정책 효과를 분석합니다.
+
+```bash
+[STD, n=5] > scenario                              # 시나리오 모드 진입
+
+[SCENARIO] > disable 9호선                          # 노선 비활성화
+[SCENARIO] > headway 2호선 1.5                      # 배차간격 1.5배 (감축)
+[SCENARIO] > add-route                             # 신규 노선 추가 (대화형)
+[SCENARIO] > apply                                 # 시나리오 적용
+[SCENARIO] > compare 37.55 126.97 37.50 127.03 09:00  # 원본 vs 시나리오 비교
+[SCENARIO] > exit                                  # 원본 상태로 복귀
+```
+
+**사용 예시:** 9호선 폐선 시 강남역 접근성 변화, GTX-A 개통 효과 분석
+
+> 상세 사용법: **[시나리오 모드 문서](docs/Scenario-Mode.md)**
+
 ### 테스트 좌표
 
 | 구간 | 출발 | 도착 | 명령어 |
@@ -190,10 +223,14 @@ search.cmd
 
 ### 검색 성능
 
-| 모드 | 검색 시간 | 경로 수 | 결과 특성 |
-|------|----------|--------|----------|
-| STANDARD | ~0.35초 | 4개 | 시간 기준 최적 경로 |
-| MULTI_CRITERIA | ~0.35초 | **11개** | 파레토 최적 (시간/환승/비용 다양) |
+| 항목 | STANDARD | MULTI_CRITERIA |
+|------|----------|----------------|
+| 단일 검색 | ~0.35초 | ~0.35초 |
+| 경로 수 | 4개 | **11개** (파레토 최적) |
+| 배치 처리 (16스레드) | **43.4 req/s** | - |
+| 1000 OD 처리 | **23초** | - |
+
+> 배치 테스트 상세: **[BATCH_PERFORMANCE_TEST.md](docs/BATCH_PERFORMANCE_TEST.md)**
 
 ### 최적화 기법
 
@@ -269,21 +306,24 @@ korean-otp/
 └── src/main/java/kr/otp/
     ├── Main.java                # CLI 진입점
     │
-    ├── core/
-    │   ├── KoreanRaptor.java    # 메인 엔진
+    ├── core/                    # 핵심 엔진
+    │   ├── KoreanRaptor.java
     │   └── AccessEgressFinder.java
+    │
+    ├── scenario/                # 시나리오 모드 ⭐
+    │   ├── ScenarioManager.java
+    │   ├── ScenarioCli.java
+    │   ├── ScenarioTransitData.java
+    │   └── *Modification.java
     │
     ├── osm/                     # OSM 도보 경로
     │   ├── OsmLoader.java
     │   ├── StreetNetwork.java
-    │   ├── StreetNode.java
-    │   ├── StreetEdge.java
     │   └── WalkingRouter.java
     │
     ├── gtfs/                    # GTFS 모델 & 로더
     │   ├── model/
-    │   ├── loader/
-    │   └── GtfsBundle.java
+    │   └── loader/
     │
     └── raptor/
         ├── data/                # TransitData

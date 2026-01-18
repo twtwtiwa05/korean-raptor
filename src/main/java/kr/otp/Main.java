@@ -8,6 +8,7 @@ import kr.otp.osm.StreetNetwork;
 import kr.otp.raptor.data.TransitData;
 import kr.otp.raptor.data.TransitDataBuilder;
 import kr.otp.raptor.spi.KoreanTripSchedule;
+import kr.otp.scenario.ScenarioCli;
 
 import org.opentripplanner.raptor.api.path.RaptorPath;
 import org.opentripplanner.raptor.api.path.PathLeg;
@@ -81,7 +82,7 @@ public class Main {
             long buildStart = System.currentTimeMillis();
 
             TransitDataBuilder builder = new TransitDataBuilder(gtfs);
-            TransitData transitData = builder.build();
+            transitData = builder.build();  // 전역 변수에 저장
 
             long buildElapsed = System.currentTimeMillis() - buildStart;
             System.out.printf("  완료: %,d 패턴, %,d 트립 (%.1f초)%n",
@@ -90,7 +91,7 @@ public class Main {
             // ═══════════════════════════════════════════════════════════════
             // Step 3: OSM 도로망 로드 (선택적)
             // ═══════════════════════════════════════════════════════════════
-            StreetNetwork streetNetwork = null;
+            streetNetwork = null;  // 전역 변수에 저장
             Path osmPath = Path.of("data/osm/south-korea.osm.pbf");
 
             if (Files.exists(osmPath)) {
@@ -267,6 +268,10 @@ public class Main {
         System.out.println();
     }
 
+    // 전역 데이터 (시나리오 모드용)
+    private static TransitData transitData;
+    private static StreetNetwork streetNetwork;
+
     /**
      * 대화형 CLI
      */
@@ -277,6 +282,7 @@ public class Main {
         System.out.println("  입력: 출발위도 출발경도 도착위도 도착경도 시간 [결과수]");
         System.out.println("  예시: 37.5547 126.9707 37.4979 127.0276 09:00 5");
         System.out.println("  명령: q(종료), n=숫자(결과수 변경), mc(MULTI_CRITERIA), std(STANDARD)");
+        System.out.println("  시나리오: scenario (시나리오 모드 진입)");
         System.out.println("═══════════════════════════════════════════════════════════════");
         System.out.println();
 
@@ -321,6 +327,18 @@ public class Main {
                 if (line.equalsIgnoreCase("std")) {
                     useMultiCriteria = false;
                     System.out.println("검색 모드: STANDARD (최단 시간)");
+                    printPrompt();
+                    continue;
+                }
+
+                // 시나리오 모드 진입
+                if (line.equalsIgnoreCase("scenario") || line.equalsIgnoreCase("sc")) {
+                    ScenarioCli scenarioCli = new ScenarioCli(transitData, streetNetwork, reader, raptor);
+                    boolean returnToMain = scenarioCli.run();
+                    if (!returnToMain) {
+                        System.out.println("종료합니다.");
+                        break;
+                    }
                     printPrompt();
                     continue;
                 }

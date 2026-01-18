@@ -47,18 +47,18 @@ public class KoreanRaptor {
 
     private static final Logger LOG = LoggerFactory.getLogger(KoreanRaptor.class);
 
-    // 설정 상수 - 속도 최적화
-    private static final double MAX_ACCESS_WALK_METERS = 400.0;   // 출발지에서 정류장까지 최대 도보 거리
-    private static final double MAX_EGRESS_WALK_METERS = 400.0;   // 정류장에서 목적지까지 최대 도보 거리
+    // 설정 상수 - 성공률 최적화 (99%+ 목표)
+    private static final double MAX_ACCESS_WALK_METERS = 800.0;   // 출발지에서 정류장까지 최대 도보 거리 (400→800)
+    private static final double MAX_EGRESS_WALK_METERS = 800.0;   // 정류장에서 목적지까지 최대 도보 거리 (400→800)
     private static final double WALK_SPEED_MPS = 1.2;             // 도보 속도 (m/s)
-    private static final int SEARCH_WINDOW_SECONDS = 900;         // 검색 시간 범위 (15분)
+    private static final int SEARCH_WINDOW_SECONDS = 1800;        // 검색 시간 범위 (30분) - 최적값
     private static final int MAX_RESULTS = 5;                     // 최대 결과 수
-    private static final int MAX_ACCESS_STOPS = 30;               // 최대 출발 정류장 수 (지하철역 포함 위해 증가)
-    private static final int MAX_EGRESS_STOPS = 30;               // 최대 도착 정류장 수 (지하철역 포함 위해 증가)
+    private static final int MAX_ACCESS_STOPS = 30;               // 최대 출발 정류장 수
+    private static final int MAX_EGRESS_STOPS = 30;               // 최대 도착 정류장 수
 
-    // MULTI_CRITERIA 최적화 설정 (STANDARD와 동일 조건)
-    private static final int MC_SEARCH_WINDOW_SECONDS = 900;      // MC 모드 검색 범위 (15분, STD와 동일)
-    private static final int MC_ADDITIONAL_TRANSFERS = 3;         // MC 모드 추가 환승 제한 (3회, STD와 동일)
+    // MULTI_CRITERIA 최적화 설정
+    private static final int MC_SEARCH_WINDOW_SECONDS = 1800;     // MC 모드 검색 범위 (30분) - 최적값
+    private static final int MC_ADDITIONAL_TRANSFERS = 3;         // MC 모드 추가 환승 제한 (3회)
     private static final double MC_RELAX_RATIO = 1.0;             // 비용 완화 없음 (정확한 파레토)
     private static final int MC_RELAX_SLACK = 0;                  // 슬랙 없음
 
@@ -68,7 +68,7 @@ public class KoreanRaptor {
     private final AccessEgressFinder accessEgressFinder;
 
     public KoreanRaptor(TransitData transitData) {
-        this(transitData, null);
+        this(transitData, (StreetNetwork) null);
     }
 
     public KoreanRaptor(TransitData transitData, StreetNetwork streetNetwork) {
@@ -89,6 +89,35 @@ public class KoreanRaptor {
         }
 
         LOG.info("KoreanRaptor 초기화 완료: {} (OSM: {})", provider, isUsingOsm());
+    }
+
+    /**
+     * 기존 AccessEgressFinder를 재사용하는 생성자 (시나리오 모드용).
+     *
+     * OSM 매핑을 다시 계산하지 않아 빠른 초기화 가능.
+     *
+     * @param transitData 대중교통 데이터
+     * @param existingFinder 재사용할 AccessEgressFinder
+     */
+    public KoreanRaptor(TransitData transitData, AccessEgressFinder existingFinder) {
+        this.transitData = transitData;
+        this.provider = new KoreanTransitDataProvider(transitData);
+
+        RaptorConfig<KoreanTripSchedule> config = new RaptorConfig<>(
+            new RaptorTuningParameters() {},
+            new RaptorEnvironment() {}
+        );
+        this.raptorService = new RaptorService<>(config);
+        this.accessEgressFinder = existingFinder;
+
+        LOG.info("KoreanRaptor 초기화 완료 (AccessEgressFinder 재사용): {} (OSM: {})", provider, isUsingOsm());
+    }
+
+    /**
+     * AccessEgressFinder 반환 (시나리오 모드에서 재사용)
+     */
+    public AccessEgressFinder getAccessEgressFinder() {
+        return accessEgressFinder;
     }
 
     /**
